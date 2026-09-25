@@ -1,0 +1,318 @@
+TEAM TASK 2 — SIGNAL PROCESSING & FEATURE ENGINE (v2)
+
+HARDWARE UPDATE: the conductivity probe that was bought is a TDS module
+(0–1000 ppm), not a raw EC (µS/cm) probe. Every "EC" field below is renamed
+to "TDS". This is mostly a rename — the processing job is identical — with
+one addition: readings at or near 1000 ppm are saturated, not necessarily
+exactly 1000 ppm, and validation needs to flag that. Temperature compensation is
+also now backed by a real sensor (DS18B20), not an assumption.
+
+---
+
+1. Your responsibility
+
+You take raw sensor measurements and convert them into clean, meaningful numerical information that the intelligence system can understand.
+
+You are NOT responsible for deciding:
+
+«"This is fouling."»
+
+You only produce reliable measurements and features.
+
+---
+
+2. Input
+
+You receive:
+
+SensorReading
+
+from:
+
+- pH
+- TDS
+- turbidity
+- temperature
+
+Later:
+
+- acoustic measurements
+
+Example:
+
+pH = 7.31
+TDS = 412 ppm
+Turbidity = 4.2 % attenuation
+Temperature = 27.4 °C
+
+---
+
+3. Output
+
+Your primary output is:
+
+FeatureSet
+
+For MVP:
+
+struct FeatureSet {
+    float ph;
+    float tds;
+    float turbidity;
+    float temperature;
+
+    float ph_slope;
+    float tds_slope;
+    float turbidity_slope;
+    float temperature_slope;
+
+    float ph_variance;
+    float tds_variance;
+    float turbidity_variance;
+    float temperature_variance;
+
+    float ph_deviation;
+    float tds_deviation;
+    float turbidity_deviation;
+    float temperature_deviation;
+
+    bool  tds_saturated;     // true when tds >= ~990 ppm — value is a floor, not exact
+    float feature_quality;
+};
+
+Do not assume every feature will remain in the final system.
+
+The purpose of your work is to determine which features are useful.
+
+---
+
+4. Your modules
+
+Create:
+
+firmware/
+├── signal_processing/
+│   ├── filters.cpp
+│   ├── filters.h
+│   ├── statistics.cpp
+│   ├── statistics.h
+│   ├── validation.cpp
+│   └── validation.h
+│
+└── features/
+    ├── feature_engine.cpp
+    ├── feature_engine.h
+    └── feature_types.h
+
+---
+
+5. Filtering
+
+Implement basic functions:
+
+float movingAverage(...);
+float medianFilter(...);
+
+Do NOT build complicated DSP yet.
+
+The goal is reliable MVP behavior.
+
+---
+
+6. Validation
+
+A reading should be marked suspicious when:
+
+outside physical range
+impossible jump
+missing
+unstable
+saturated
+
+Example:
+
+Previous pH = 7.2
+Current pH = 15.7
+
+This should not silently enter the intelligence system as a normal reading.
+
+TDS-specific: a reading pinned at or above ~990 ppm should be marked
+`tds_saturated = true` rather than trusted at face value — the true
+concentration could be higher and the module can't tell you by how much.
+
+---
+
+7. Quality score
+
+Generate:
+
+float quality;
+
+between:
+
+0.0 = unusable
+1.0 = excellent
+
+The quality score describes the quality of this measurement, NOT whether the sensor itself is healthy.
+
+This distinction is important.
+
+---
+
+8. Temporal features
+
+For a sequence:
+
+7.1
+7.2
+7.3
+7.5
+7.8
+
+calculate:
+
+Slope
+
+How quickly is it changing?
+
+Δvalue / Δtime
+
+Variance
+
+How unstable is the signal?
+
+Deviation
+
+How far is the current value from the learned normal baseline?
+
+---
+
+9. Temperature compensation
+
+TDS is strongly affected by temperature, and pH somewhat so. A DS18B20 is
+confirmed hardware, so both compensations can use a real, synchronized
+temperature reading rather than an assumed constant.
+
+Therefore the processing layer should provide the intelligence layer with
+temperature-aware TDS (and pH) information rather than blindly passing raw
+values.
+
+Do not invent a compensation formula without checking the actual TDS
+module's own documentation — cheap analog TDS boards usually already apply
+a fixed-temperature assumption internally, and re-compensating on top of
+that can do more harm than good if you don't know what the board itself
+assumes.
+
+For the MVP, create an abstraction:
+
+float compensateTDS(
+    float rawTDS,
+    float temperature
+);
+
+The actual implementation can initially be configurable or disabled until
+the module's behavior is confirmed empirically (Task 5 can help verify this
+with a controlled-temperature experiment).
+
+---
+
+10. Acoustic processing
+
+Do not immediately assume:
+
+high damping = fouling
+
+That is a research hypothesis.
+
+The project specifically requires controlled experiments comparing clean, artificially fouled and heavily fouled conditions and measuring amplitude, frequency, decay, damping and repeatability.
+
+Your job initially is simply to extract:
+
+amplitude
+dominant frequency
+decay
+SNR
+
+from an acoustic capture. The receive path is a 40 kHz transducer through an
+LM358 envelope/ring-down circuit — decay is read as ring-down time (µs)
+above a threshold, not a full waveform capture, unless the hardware team
+adds one.
+
+---
+
+11. Mini guide
+
+Step 1
+
+Implement statistical utilities.
+
+Step 2
+
+Write unit tests using arrays:
+
+[1, 2, 3, 4, 5]
+
+Step 3
+
+Implement validation.
+
+Step 4
+
+Implement filtering.
+
+Step 5
+
+Implement temporal windows.
+
+Example:
+
+last 10 readings
+
+Step 6
+
+Implement FeatureEngine.
+
+Step 7
+
+Feed fake sensor trajectories into it.
+
+Example:
+
+NORMAL:
+pH = 7.2 ± 0.1
+
+EVENT:
+pH gradually moves to 8.4
+
+DRIFT:
+pH slowly moves 7.2 → 7.4 → 7.6
+
+SATURATION:
+TDS pinned at 1000 ppm for several cycles — confirm tds_saturated flips true
+and slope/variance don't blow up on the clipped value
+
+Step 8
+
+Report which features actually distinguish the cases.
+
+---
+
+12. Definition of done
+
+You are finished when:
+
+FeatureSet features =
+    featureEngine.process(readings);
+
+works reliably.
+
+You must provide:
+
+- filtering functions
+- validation functions
+- temporal calculations
+- feature extraction
+- unit tests
+- example input/output data
+
+Your code must compile independently of actual sensors.

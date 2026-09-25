@@ -1,0 +1,380 @@
+TEAM TASK 1 — CORE APPLICATION & SAMPLING CONTROLLER (v2)
+
+HARDWARE UPDATE: the system has no solenoid valve or pump. The sampling
+chamber is a passive sidecar plumbed directly into the tank, so its water
+level always mirrors the tank's — it fills when the tank fills and drains
+when the tank drains, with nothing for this controller to command. Every
+state below that assumed an active fill/drain cycle has been replaced.
+
+---
+
+1. Your responsibility
+
+You are responsible for the central controller of the entire MVP.
+
+You do NOT implement:
+
+- sensor-specific electronics,
+- filtering algorithms,
+- ML models,
+- individual sensor drivers.
+
+Your job is to make all those components work together.
+
+Think of yourself as the conductor.
+
+The other modules produce information. You decide when they are called, in what order, and what happens next.
+
+---
+
+2. What you are building
+
+Build the central sampling workflow:
+
+IDLE
+ ↓
+PREPARE
+ ↓
+WAIT_FOR_WET
+ ↓
+STABILIZATION
+ ↓
+MEASUREMENT
+ ↓
+ANALYSIS
+ ↓
+ACTION
+ ↓
+REVALIDATION
+ ↓
+IDLE
+
+There is no OPEN_INLET, FILLING, DRAIN or FLUSH state: there is nothing to
+open or command, and nothing to drain — the chamber empties on its own the
+moment the tank does. WAIT_FOR_WET replaces OPEN_INLET/WAIT_FOR_WATER/FILLING
+as one state: it polls the `chamber_wet` flag from the hardware layer and
+holds there — potentially for a long time if the tank is genuinely empty —
+until it goes true. This is a normal, expected wait, not a timeout error.
+
+The MVP does not need every advanced state immediately.
+
+Start with:
+
+IDLE
+PREPARE
+MEASUREMENT
+ANALYSIS
+ACTION
+REVALIDATION
+ERROR
+
+PREPARE should itself check `chamber_wet` before advancing to MEASUREMENT;
+if it's false, stay in PREPARE (or loop back to it) rather than treating it
+as an error. Add WAIT_FOR_WET and STABILIZATION as their own explicit states
+once you want to log that distinction separately.
+
+---
+
+3. Your modules
+
+Create:
+
+firmware/
+├── application/
+│   ├── application_controller.cpp
+│   ├── application_controller.h
+│   ├── sampling_controller.cpp
+│   └── sampling_controller.h
+│
+├── state_machine/
+│   ├── sampling_state.h
+│   ├── sampling_state_machine.cpp
+│   └── sampling_state_machine.h
+│
+├── control/
+│   ├── decision_executor.cpp
+│   └── decision_executor.h
+│
+└── configuration/
+    ├── system_config.h
+    └── system_config.cpp
+
+---
+
+4. Input
+
+Your controller receives:
+
+SensorReading
+FeatureSet
+WaterState
+SensorHealth
+Diagnosis
+Decision
+ActionResult
+
+from other team members, plus one hardware-layer signal that gates
+everything else:
+
+bool chamber_wet   // from the HAL — true while the sidecar has water
+
+Example:
+
+Diagnosis diagnosis = diagnosticEngine.analyze(
+    features,
+    waterState,
+    sensorHealth
+);
+
+Then:
+
+Decision decision =
+    decisionEngine.decide(diagnosis);
+
+Your controller does not need to know HOW the diagnosis was calculated, and
+it does not need to know HOW `chamber_wet` is measured — only that it must
+check it before measuring and immediately before commanding ACTION = CLEAN
+(the transducer must never run dry, and the chamber can go dry mid-cycle
+without warning as the tank empties).
+
+---
+
+5. Output
+
+Your controller produces:
+
+ActionResult
+
+and changes the system state.
+
+For example:
+
+Diagnosis:
+SENSOR_FOULING
+confidence = 0.91
+
+↓
+
+Decision:
+CLEAN
+
+↓
+
+Controller:
+re-check chamber_wet → still true → start cleaning
+
+↓
+
+ActionResult:
+executed = true
+successful = true
+
+Then:
+
+REVALIDATION
+
+If `chamber_wet` had gone false between the decision and the action, the
+controller aborts the CLEAN, does not run the transducer, and transitions to
+IDLE (or back to WAIT_FOR_WET) instead — never REVALIDATION for an action
+that didn't happen.
+
+---
+
+6. Important rule
+
+Do NOT write scattered logic like:
+
+if (...)
+    ...
+else if (...)
+    ...
+
+throughout the project.
+
+Centralize system transitions in the state machine.
+
+The specification explicitly calls for a central state machine rather than scattered conditional logic.
+
+---
+
+7. Define the state machine
+
+Start with:
+
+enum class SamplingState {
+    IDLE,
+    PREPARE,
+    WAIT_FOR_WET,
+    MEASUREMENT,
+    ANALYSIS,
+    ACTION,
+    REVALIDATION,
+    COMPLETE,
+    ERROR
+};
+
+Each state must define:
+
+What happens when entering?
+What happens while running?
+When does it finish?
+What happens on timeout?
+What happens on failure?
+What state comes next?
+
+Example:
+
+MEASUREMENT
+    ↓
+acquire sensors
+    ↓
+if successful → ANALYSIS
+if timeout → ERROR
+if sensor failure → ERROR
+if chamber_wet flips false mid-read → ERROR (or back to WAIT_FOR_WET, team's call — but never silently continue on a dry read)
+
+WAIT_FOR_WET
+    ↓
+poll chamber_wet
+    ↓
+if true → STABILIZATION
+if the tank has been dry past some long, configurable ceiling → log it, stay in WAIT_FOR_WET (this is not an ERROR — it just means the tank is empty)
+
+---
+
+8. Mock mode
+
+This is extremely important.
+
+Before hardware exists, your application must work with:
+
+MockSensorManager
+MockActuatorManager
+MockLogger
+
+Your MockSensorManager must also be able to simulate `chamber_wet` toggling
+false mid-cycle, since that's a real condition your state machine has to
+survive, not just the happy path where it stays true throughout.
+
+Therefore:
+
+Application
+     ↓
+interfaces
+     ↓
+mock implementation
+
+not:
+
+Application
+     ↓
+GPIO
+
+---
+
+9. Configuration
+
+Do not hard-code things like:
+
+#define CLEANING_TIME 30000
+
+everywhere.
+
+Create:
+
+struct SystemConfig {
+    uint32_t stabilization_time_ms;
+    uint32_t measurement_timeout_ms;
+    uint32_t cleaning_duration_ms;
+    uint32_t revalidation_delay_ms;
+    uint32_t wet_poll_interval_ms;      // how often WAIT_FOR_WET checks chamber_wet
+};
+
+The exact values can change later.
+
+---
+
+10. Mini guide to completion
+
+Step 1
+
+Create the state enum.
+
+Step 2
+
+Create the state-machine class.
+
+Step 3
+
+Implement:
+
+initialize()
+update()
+transitionTo()
+getCurrentState()
+
+Step 4
+
+Implement mock sensor acquisition, including a mock `chamber_wet` signal you
+can flip from the test harness.
+
+Step 5
+
+Implement:
+
+MEASUREMENT → ANALYSIS → ACTION → REVALIDATION
+
+using fake data.
+
+Step 6
+
+Add timeout handling.
+
+Step 7
+
+Add error recovery.
+
+Step 8
+
+Add logging calls.
+
+Step 9
+
+Write a test that executes an entire cycle without hardware, plus one test
+where `chamber_wet` goes false mid-cycle and one where it stays false the
+whole run (system should idle/wait, not error).
+
+---
+
+11. Definition of done
+
+You are finished when:
+
+./run_mvp
+
+or the ESP32 firmware can execute:
+
+IDLE
+→ WAIT_FOR_WET
+→ MEASUREMENT
+→ ANALYSIS
+→ DIAGNOSIS
+→ DECISION
+→ ACTION
+→ REVALIDATION
+→ COMPLETE
+→ IDLE
+
+using mock sensors.
+
+It must also survive:
+
+sensor failure
+timeout
+invalid reading
+failed action
+chamber_wet going false mid-cycle, including mid-CLEAN
+
+without crashing.
+
+Your final deliverable is the central controller that everyone else plugs into.

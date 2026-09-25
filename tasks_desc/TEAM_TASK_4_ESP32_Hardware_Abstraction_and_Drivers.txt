@@ -1,0 +1,334 @@
+TEAM TASK 4 — ESP32-S3 HARDWARE ABSTRACTION & DRIVERS (v2)
+
+HARDWARE UPDATE: there is no solenoid valve, no pump, and no dedicated
+water-level/float switch in the bought parts. The sampling chamber is a
+passive sidecar plumbed into the tank, so it floods and drains on its own.
+IValveController and valve_controller.{cpp,h} are dropped entirely. In their
+place, this layer owns one new small responsibility: deriving a
+`chamber_wet` signal for the rest of the system, since nothing else can see
+it directly. The conductivity probe is a TDS module, not a raw EC probe, so
+ec_sensor.{cpp,h} is renamed to tds_sensor.{cpp,h}.
+
+---
+
+1. Your responsibility
+
+You are responsible for making the software communicate with physical hardware.
+
+Your biggest rule:
+
+«OTHER PEOPLE SHOULD NOT NEED TO KNOW WHICH GPIO PIN A SENSOR USES.»
+
+The project explicitly requires hardware abstraction so the intelligence layer interacts with interfaces rather than GPIO/ADC implementation details. That now includes `chamber_wet` — nobody above this layer should know it's inferred from a sensor characteristic rather than read from a dedicated level switch.
+
+---
+
+2. Platform
+
+Target:
+
+ESP32-S3
+ESP-IDF
+C/C++
+
+The project specifies ESP-IDF + C/C++ for the final firmware because of timing, peripherals, FreeRTOS, storage and hardware control requirements.
+
+---
+
+3. Modules
+
+Create:
+
+firmware/
+├── hal/
+│   ├── gpio_hal.cpp
+│   ├── gpio_hal.h
+│   ├── adc_hal.cpp
+│   └── adc_hal.h
+│
+├── drivers/
+│   ├── sensors/
+│   │   ├── ph_sensor.cpp
+│   │   ├── ph_sensor.h
+│   │   ├── tds_sensor.cpp
+│   │   ├── tds_sensor.h
+│   │   ├── turbidity_sensor.cpp
+│   │   ├── turbidity_sensor.h
+│   │   ├── temperature_sensor.cpp
+│   │   └── temperature_sensor.h
+│   │
+│   ├── actuators/
+│   │   ├── ultrasonic_controller.cpp
+│   │   └── ultrasonic_controller.h
+│   │
+│   ├── chamber/
+│   │   ├── chamber_presence.cpp
+│   │   └── chamber_presence.h
+│   │
+│   ├── storage/
+│   │   ├── sd_logger.cpp
+│   │   └── sd_logger.h
+│   │
+│   └── rtc/
+│       ├── rtc.cpp
+│       └── rtc.h
+│
+└── mocks/
+    ├── mock_sensors.cpp
+    └── mock_actuators.cpp
+
+No valve_controller — there is no valve to drive.
+
+---
+
+4. Sensor interface
+
+Define a common interface.
+
+For example:
+
+class ISensor {
+public:
+    virtual bool begin() = 0;
+    virtual SensorReading read() = 0;
+    virtual bool selfTest() = 0;
+    virtual ~ISensor() {}
+};
+
+Then:
+
+class PHSensor : public ISensor
+{
+    ...
+};
+
+and:
+
+class TDSSensor : public ISensor
+{
+    ...
+};
+
+---
+
+5. Input
+
+Physical inputs:
+
+ADC
+GPIO
+I2C
+1-Wire
+etc.
+
+depending on the actual sensor.
+
+The driver converts these into:
+
+SensorReading
+
+---
+
+6. Output
+
+Every driver should provide a consistent output.
+
+Example:
+
+SensorReading reading = phSensor.read();
+
+containing:
+
+sensor type
+timestamp
+value
+quality
+status
+
+The rest of the system should NOT care how the value was obtained.
+
+---
+
+7. Chamber presence (replaces the valve/actuator interface for sampling)
+
+There is no valve to open or close, so there is no IValveController. Instead
+this layer exposes one read-only signal:
+
+class IChamberPresence {
+public:
+    virtual bool isWet() = 0;
+    virtual ~IChamberPresence() {}
+};
+
+For the MVP, back this with the TDS and/or turbidity probe's own
+characteristics (an analog probe floating in air reads very differently —
+noisier, often pinned near zero or near full-scale — than one submerged),
+rather than a dedicated sensor. Document exactly which signal and threshold
+you used in `chamber_presence.cpp`, since this is a judgment call that Task 2
+and Task 3 both depend on.
+
+Open item for the team: if presence detection from TDS/turbidity alone turns
+out unreliable in practice, the cheapest fix is a simple two-wire continuity
+probe or a small float switch — flag this back to the group rather than
+silently degrading `chamber_wet` accuracy.
+
+The only real actuator left is the transducer:
+
+class IUltrasonicController {
+public:
+    virtual bool startCleaning() = 0;
+    virtual bool stopCleaning() = 0;
+};
+
+The specification requires actuator interfaces such as this and explicitly says the ESP32 must not directly drive high-current loads. The 60 W transducer needs its own driver board (MOSFET/half-bridge, impedance-matched) — this controller only toggles it on and off.
+
+---
+
+8. Mock hardware
+
+Before the real hardware arrives, create:
+
+MockPHSensor
+MockTDSSensor
+MockTurbiditySensor
+MockTemperatureSensor
+MockChamberPresence
+MockUltrasonicController
+
+Example:
+
+SensorReading MockPHSensor::read()
+{
+    return {
+        SensorType::PH,
+        timestamp,
+        7.2f,
+        0.98f,
+        ReadingStatus::VALID
+    };
+}
+
+MockChamberPresence must be able to flip between wet and dry on command from
+a test, since Task 1's state machine has to survive the chamber going dry
+mid-cycle — that's a real operating condition here, not an edge case.
+
+This allows the rest of the team to test the application now.
+
+---
+
+9. Storage
+
+Implement an abstraction:
+
+class IDataLogger {
+public:
+    virtual bool logSensorReading(
+        const SensorReading& reading
+    ) = 0;
+
+    virtual bool logDiagnosis(
+        const Diagnosis& diagnosis
+    ) = 0;
+};
+
+Initially the implementation can write to:
+
+serial console
+
+Later:
+
+microSD
+
+---
+
+10. RTC
+
+Provide:
+
+uint64_t getTimestamp();
+
+Do not let other modules directly talk to the DS3231.
+
+They ask:
+
+clock.now();
+
+The project requires timestamps and persistent event history, and the hardware target includes a DS3231 RTC and microSD.
+
+---
+
+11. Calibration
+
+Every relevant sensor should eventually support:
+
+calibrate()
+getCalibrationStatus()
+applyCalibration()
+
+Calibration data should be stored separately.
+
+Do NOT bury calibration coefficients inside intelligence/ML code. This is explicitly required by the project specification. This applies to the TDS module's ppm mapping too — don't assume the stock calibration is correct without checking it against a known solution.
+
+---
+
+12. Mini guide
+
+Step 1
+
+Create ESP-IDF project.
+
+Step 2
+
+Make it compile and boot.
+
+Step 3
+
+Implement common data structures.
+
+Step 4
+
+Implement mock drivers, including MockChamberPresence.
+
+Step 5
+
+Implement hardware interfaces.
+
+Step 6
+
+Implement serial logger.
+
+Step 7
+
+Implement RTC abstraction.
+
+Step 8
+
+When hardware arrives, replace mock implementations with real drivers, and
+tune the chamber-presence threshold against the actual TDS/turbidity
+behavior in air vs. water.
+
+Do NOT modify the intelligence code.
+
+---
+
+13. Definition of done
+
+You are finished with the MVP when:
+
+ESP32-S3 boots
+        ↓
+initializes drivers
+        ↓
+reads mock sensors, including chamber presence
+        ↓
+returns SensorReading
+        ↓
+controls the mock ultrasonic actuator
+        ↓
+logs events
+
+Then the real-driver phase begins.
+
+Your biggest success criterion is:
+
+«Changing from MockSensor to RealSensor must NOT require changes to the intelligence layer.»

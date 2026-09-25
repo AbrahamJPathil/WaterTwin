@@ -1,0 +1,374 @@
+TEAM TASK 5 — EXPERIMENTS, DATASET & ML (v2)
+
+HARDWARE UPDATE: the conductivity signal throughout is TDS (ppm), not raw
+EC (µS/cm) — the bought probe is a 0–1000 ppm TDS module. Every dataset
+column and experiment below is renamed accordingly. Two new things worth
+experimenting on, specific to the actual hardware: (1) whether TDS/turbidity
+readings reliably distinguish "chamber wet" from "chamber dry" now that
+there's no dedicated level sensor, and (2) how close a TDS reading gets
+pinned near 1000 ppm before it's genuinely useless.
+
+---
+
+1. Your responsibility
+
+Your job is to answer:
+
+«"Do our assumptions actually work?"»
+
+You create data and experimentally determine useful parameters/features.
+
+You are NOT responsible for the core firmware.
+
+Use Python here.
+
+---
+
+2. Why you are needed
+
+The project is research-oriented.
+
+Eventually we need evidence for:
+
+Does the water fingerprint work?
+Can water events be separated from sensor problems?
+Does acoustic sensing correlate with fouling?
+Does cleaning improve sensor behavior?
+Can an ML model outperform the baseline?
+Can chamber-wet/dry be reliably detected from TDS/turbidity alone?
+
+These cannot be answered by writing code alone.
+
+---
+
+3. Your tools
+
+Use Python for:
+
+NumPy
+Pandas
+SciPy
+scikit-learn
+matplotlib
+
+PyTorch/TensorFlow should only be introduced if we actually need neural networks.
+
+The specification identifies Python as the development-side environment for dataset processing, experimentation, feature engineering, statistical analysis, ML, visualization and TinyML work.
+
+---
+
+4. Dataset structure
+
+Create:
+
+data/
+├── raw/
+├── validated/
+├── processed/
+└── datasets/
+
+experiments/
+├── water_state/
+├── sensor_fouling/
+├── acoustic/
+├── cleaning/
+└── chamber_presence/
+
+---
+
+5. Dataset A — Normal behavior
+
+Collect:
+
+pH
+TDS
+turbidity
+temperature
+timestamp
+
+over time.
+
+Goal:
+
+«Establish the normal fingerprint of the system/tank.»
+
+Calculate:
+
+mean
+variance
+range
+slope
+daily variation
+cross-sensor correlation
+
+---
+
+6. Dataset B — Water events
+
+Create controlled scenarios where water characteristics genuinely change.
+
+Labels:
+
+NORMAL
+WATER_EVENT
+
+Record the complete temporal trajectory.
+
+Do NOT only record:
+
+before
+after
+
+The trajectory is important.
+
+---
+
+7. Dataset C — Sensor degradation
+
+Create controlled sensor abnormalities.
+
+Examples:
+
+gradual drift
+increased noise
+unstable measurement
+disconnect
+
+Labels:
+
+SENSOR_DRIFT
+SENSOR_FAILURE
+
+---
+
+8. Dataset D — Fouling
+
+Create:
+
+CLEAN
+LIGHT_FOULING
+HEAVY_FOULING
+
+and record:
+
+pH
+TDS
+turbidity
+temperature
+acoustic measurements
+
+The acoustic experiment should specifically compare clean and fouled conditions and evaluate amplitude, frequency, decay, damping and repeatability.
+
+---
+
+9. Dataset E — Chamber wet/dry detection (new)
+
+Since there's no dedicated level sensor, this dataset answers a real
+engineering question, not just a modeling one.
+
+Record TDS and turbidity readings across repeated wet ↔ dry transitions
+(dip the probes, remove them, repeat), labeled:
+
+WET
+DRY
+TRANSITIONING
+
+Report whether a simple threshold on TDS, turbidity, or their combination
+separates wet from dry cleanly, and how fast the reading settles after each
+transition — that settling time becomes the `stabilization_time_ms` value
+Task 1 needs. If no threshold separates them reliably, say so plainly; that
+finding is what justifies adding a dedicated presence sensor later.
+
+---
+
+10. Acoustic experiment
+
+Measure:
+
+amplitude
+frequency
+decay
+damping
+SNR
+repeatability
+
+Your conclusion can be:
+
+Acoustic feature X correlates with fouling
+
+or:
+
+Acoustic feature X does NOT reliably correlate with fouling
+
+Both are scientifically useful.
+
+Do NOT manufacture a positive result.
+
+---
+
+11. Cleaning experiment
+
+Measure:
+
+sensor health before
+cleaning duration
+cleaning power
+sensor health after
+measurement accuracy
+temperature rise
+repeatability
+
+The project's specification specifically calls for determining cleaning duration/power and checking sensor/chamber effects and post-cleaning response. With a 60 W transducer, also record whether cleaning runs were ever attempted or logged while the chamber was dry (a hardware/firmware bug if so) — that shouldn't be physically possible once Task 1's guard is in place, but it's worth checking the log for it during early bring-up.
+
+---
+
+12. ML
+
+Do NOT begin with a neural network.
+
+Start:
+
+Rule-based baseline
+        ↓
+Statistical model
+        ↓
+Simple ML
+        ↓
+TinyML candidate
+
+Potential models:
+
+Decision Tree
+Random Forest
+Logistic Regression
+Isolation Forest
+One-Class methods
+Small neural network
+
+Only keep a model if it gives a meaningful improvement.
+
+---
+
+13. Important dataset rule
+
+Never randomly split sequential data like:
+
+row 1–800 → train
+row 801–1000 → test
+
+if those rows are from the same continuous experiment.
+
+That can produce misleadingly good results.
+
+Prefer:
+
+Experiment 1 → training
+Experiment 2 → validation
+Experiment 3 → testing
+
+or another experiment-level split.
+
+---
+
+14. Deliverables to Person 3
+
+You must eventually provide:
+
+useful features
+baseline thresholds
+model performance
+recommended model
+confidence behavior
+chamber-wet/dry detection threshold (feeds Task 4's chamber_presence.cpp)
+
+For example:
+
+Feature:
+TDS slope
+
+Importance:
+high
+
+Recommended threshold:
+X
+
+Evidence:
+Experiments 2, 4, 7
+
+Person 3 then implements the selected algorithm in C++.
+
+---
+
+15. Mini guide
+
+Step 1
+
+Create the dataset schema.
+
+Step 2
+
+Create synthetic data immediately.
+
+Synthetic data is only for software testing.
+
+It is NOT evidence.
+
+Step 3
+
+Build Python analysis scripts.
+
+Step 4
+
+Create experiment protocols.
+
+Step 5
+
+Collect real measurements when hardware is available.
+
+Step 6
+
+Analyze normal behavior.
+
+Step 7
+
+Analyze fault/fouling behavior.
+
+Step 8
+
+Determine useful features, including the chamber wet/dry threshold.
+
+Step 9
+
+Compare baseline vs ML.
+
+Step 10
+
+Give the final algorithm/parameters to Person 3 for C++ deployment.
+
+---
+
+16. Definition of done
+
+You are finished with the initial phase when you have:
+
+dataset schema
+synthetic dataset
+analysis scripts
+experiment protocols
+feature analysis
+baseline evaluation
+chamber wet/dry detection recommendation
+
+You are finished with the ML phase when you have:
+
+trained candidate model
+test results
+comparison with baseline
+resource estimate
+recommended deployment approach
+
+The final deployed model must be lightweight enough for the ESP32-S3.
+
+Do not make "neural network" the objective.
+
+Make "better diagnosis under embedded constraints" the objective.
