@@ -1,0 +1,22 @@
+project/
+├── CMakeLists.txt
+├── main/
+│   ├── CMakeLists.txt
+│   └── main.cpp                 ← ESP-IDF app_main()
+├── core_application_sampling_controller/
+│   ├── CMakeLists.txt
+│   ├── application_controller.cpp
+│   └── ...
+├── ESP32_HW_abstraction_drivers/
+│   └── CMakeLists.txt
+├── signal_processing_feature_engine/
+│   └── CMakeLists.txt
+├── intelligence_diagnostic_engine/
+│   ├── CMakeLists.txt
+│   ├── types.h
+│   ├── intelligence.h
+│   ├── intelligence.cpp
+│   └── ...
+├── experiments_datasets_ML/
+├── tasks_desc/
+└── README.md
